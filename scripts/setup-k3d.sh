@@ -1,5 +1,16 @@
 #!/bin/bash
 
+# Check if we have our device passed in
+if [ $# -eq 0 ]; then
+  echo "Please enter your network interface"
+  exit 1
+fi
+
+# Set vars for use
+NETWORK=${1}
+SCRIPTDIR=`dirname $0`
+ENVLIST=${SCRIPTDIR%/*}/config/env.list
+
 # Install Docker
 sudo apt-get update
 
@@ -39,20 +50,31 @@ chmod +x /usr/local/bin/kubectl
 
 sudo sysctl net.ipv4.ip_forward
 
-# Info https://blog.oddbit.com/post/2018-03-12-using-docker-macvlan-networks/
-docker network create -d macvlan -o parent=enp3s0 --subnet=192.168.0.0/21 --gateway=192.168.1.1 --ip-range=192.168.0.0/24 --aux-address='host=192.168.0.8' --aux-address='n0=192.168.0.10' --aux-address="n1=192.168.0.11" --aux-address="n2=192.168.0.12" --aux-address="n3=192.168.0.13" --aux-address="n4=192.168.0.14" --aux-address="n5=192.168.0.15" mynet
+# If Docker isn't started let's start it up
+if ! pgrep -x dockerd > /dev/null 2>&1; then
+  sudo /etc/init.d/docker start
+fi
 
-sudo ip link add mynet-shim link enp3s0 type macvlan mode bridge
-sudo ip addr add 192.168.0.8/32 dev mynet-shim
-sudo ip link set mynet-shim up
-sudo ip route add 192.168.0.0/24 dev mynet-shim
+# Make sure the mynet network exists
+if ! docker network inspect mynet > /dev/null 2>&1; then 
+  # Info https://blog.oddbit.com/post/2018-03-12-using-docker-macvlan-networks/
+  docker network create -d macvlan -o parent=${NETWORK} --subnet=192.168.0.0/21 --gateway=192.168.1.1 --ip-range=192.168.0.0/24 --aux-address='host=192.168.0.8' --aux-address='n0=192.168.0.10' --aux-address="n1=192.168.0.11" --aux-address="n2=192.168.0.12" --aux-address="n3=192.168.0.13" --aux-address="n4=192.168.0.14" --aux-address="n5=192.168.0.15" mynet
 
+  # Network setup
+  sudo ip link add mynet-shim link ${NETWORK} type macvlan mode bridge
+  sudo ip addr add 192.168.0.8/32 dev mynet-shim
+  sudo ip link set mynet-shim up
+  sudo ip route add 192.168.0.0/24 dev mynet-shim
+fi
+
+# TODO: Parameterize master/workers?
 k3d create cluster k8s --network mynet --masters 3
 
 docker stop k3d-k8s-masterlb
 docker rm k3d-k8s-masterlb
-docker run --network host --env-file env.list -d --name k3d-k8s-masterlb iwilltry42/k3d-proxy:v0.0.2
+docker run --network host --env-file ${ENVLIST} -d --name k3d-k8s-masterlb iwilltry42/k3d-proxy:v0.0.2
 export KUBECONFIG=$(k3d get kubeconfig k8s)
+
 kubectl get nodes -o wide
 
 # delete cluster: k3d delete cluster k8s
